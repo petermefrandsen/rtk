@@ -440,6 +440,9 @@ enum Commands {
         /// Skip confirmation prompt when resetting
         #[arg(long, requires = "reset")]
         yes: bool,
+        /// Overlay actual LLM API token counts from agent session files
+        #[arg(long)]
+        realistic: bool,
     },
 
     /// Claude Code economics: spending (ccusage) vs savings (rtk) analysis
@@ -1895,6 +1898,7 @@ fn run_cli() -> Result<i32> {
             failures,
             reset,
             yes,
+            realistic,
         } => {
             analytics::gain::run(
                 project, // added: pass project flag
@@ -1910,6 +1914,7 @@ fn run_cli() -> Result<i32> {
                 failures,
                 reset,
                 yes,
+                realistic,
                 cli.verbose,
             )?;
             0
@@ -2746,6 +2751,30 @@ mod tests {
         if let Ok(cli) = result {
             match cli.command {
                 Commands::Gain { failures, .. } => assert!(failures),
+                _ => panic!("Expected Gain command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_gain_realistic_flag_parses() {
+        let result = Cli::try_parse_from(["rtk", "gain", "--realistic"]);
+        assert!(result.is_ok());
+        if let Ok(cli) = result {
+            match cli.command {
+                Commands::Gain { realistic, .. } => assert!(realistic),
+                _ => panic!("Expected Gain command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_gain_realistic_default_is_false() {
+        let result = Cli::try_parse_from(["rtk", "gain"]);
+        assert!(result.is_ok());
+        if let Ok(cli) = result {
+            match cli.command {
+                Commands::Gain { realistic, .. } => assert!(!realistic),
                 _ => panic!("Expected Gain command"),
             }
         }
