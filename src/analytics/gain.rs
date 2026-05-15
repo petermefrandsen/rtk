@@ -1,5 +1,6 @@
 //! Shows users how many tokens RTK has saved them over time.
 
+use crate::analytics::cli_usage;
 use crate::core::display_helpers::{format_duration, print_period_table};
 use crate::core::tracking::{DayStats, MonthStats, Tracker, WeekStats};
 use crate::core::utils::format_tokens;
@@ -26,6 +27,7 @@ pub fn run(
     failures: bool,
     reset: bool,
     yes: bool,
+    realistic: bool,
     _verbose: u8,
 ) -> Result<()> {
     let tracker = Tracker::new().context("Failed to initialize tracking database")?;
@@ -120,6 +122,10 @@ pub fn run(
         );
         print_efficiency_meter(summary.avg_savings_pct);
         println!();
+
+        if realistic {
+            print_realistic_section(summary.total_saved);
+        }
 
         // Warn about hook issues that silently kill savings (stderr, not stdout)
         match hook_check::status() {
@@ -442,6 +448,85 @@ fn shorten_path(path: &str) -> String {
             comps[comps.len() - 1]
         )
     }
+}
+
+/// Print realistic efficiency section using actual agent API token counts.
+///
+/// The "true savings" metric = RTK saved / (actual API tokens + RTK saved).
+/// This shows what fraction of total context tokens RTK prevented from reaching
+/// the LLM — using real API consumption data instead of char-count estimates.
+fn print_realistic_section(rtk_saved: usize) {
+    println!(
+        "{}",
+        styled("Realistic Efficiency (agent session files)", true)
+    );
+    println!("{}", "─".repeat(60));
+
+    let agents = cli_usage::read_all_agents();
+    if agents.is_empty() {
+        println!("No agent session files found.");
+        println!("Install Claude Code, GitHub Copilot, or Gemini CLI to see real token data.");
+        println!();
+        return;
+    }
+
+    const COL_AGENT: usize = 14;
+    const COL_ACTUAL: usize = 14;
+    const COL_SAVED: usize = 12;
+    const COL_PCT: usize = 15;
+
+    println!(
+        "{:<COL_AGENT$}  {:>COL_ACTUAL$}  {:>COL_SAVED$}  {:>COL_PCT$}",
+        "Agent", "Actual tokens", "RTK saved", "True savings %"
+    );
+    println!("{}", "─".repeat(60));
+
+    let mut total_actual: u64 = 0;
+    let mut agent_names: Vec<&str> = agents.keys().map(|s| s.as_str()).collect();
+    agent_names.sort();
+
+    for agent in &agent_names {
+        let daily = &agents[*agent];
+        let actual: u64 = daily.values().sum();
+        total_actual += actual;
+        let pct = true_savings_pct(rtk_saved, actual);
+        println!(
+            "{:<COL_AGENT$}  {:>COL_ACTUAL$}  {:>COL_SAVED$}  {:>14.1}%",
+            agent,
+            format_tokens(actual as usize),
+            format_tokens(rtk_saved),
+            pct,
+        );
+    }
+
+    if agents.len() > 1 {
+        let pct = true_savings_pct(rtk_saved, total_actual);
+        println!("{}", "─".repeat(60));
+        println!(
+            "{:<COL_AGENT$}  {:>COL_ACTUAL$}  {:>COL_SAVED$}  {:>14.1}%",
+            "combined",
+            format_tokens(total_actual as usize),
+            format_tokens(rtk_saved),
+            pct,
+        );
+    }
+
+    println!();
+    println!("Actual = LLM API tokens consumed by agent (from session files).");
+    println!("True savings = RTK saved / (actual + saved) — share of total context RTK cut.");
+    println!();
+}
+
+/// True savings: share of total context tokens that RTK prevented from reaching the LLM.
+///
+/// Without RTK the agent would have consumed `actual + saved` tokens. RTK removed `saved`
+/// of those. So the real reduction is `saved / (actual + saved)`.
+fn true_savings_pct(rtk_saved: usize, actual_agent_tokens: u64) -> f64 {
+    let denom = actual_agent_tokens + rtk_saved as u64;
+    if denom == 0 {
+        return 0.0;
+    }
+    rtk_saved as f64 / denom as f64 * 100.0
 }
 
 fn print_ascii_graph(data: &[(String, usize)]) {
