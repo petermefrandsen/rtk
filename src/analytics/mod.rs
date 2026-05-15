@@ -2,5 +2,6 @@
 
 pub mod cc_economics;
 pub mod ccusage;
+pub mod cli_usage;
 pub mod gain;
 pub mod session_cmd;
