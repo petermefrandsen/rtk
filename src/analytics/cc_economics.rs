@@ -2,6 +2,7 @@
 //!
 //! Combines ccusage (tokens spent) with rtk tracking (tokens saved) to provide
 //! dual-metric economic impact reporting with blended and active cost-per-token.
+//! Also reports flat-rate agent usage (Copilot, Gemini) using native session readers.
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -9,6 +10,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use super::ccusage::{self, CcusagePeriod, Granularity};
+use super::cli_usage;
 use crate::core::tracking::{DayStats, MonthStats, Tracker, WeekStats};
 use crate::core::utils::{format_cpt, format_tokens, format_usd};
 
@@ -536,6 +538,7 @@ fn display_summary(tracker: &Tracker, verbose: u8) -> Result<()> {
         println!();
     }
 
+    print_flat_rate_section(totals.rtk_saved_tokens, totals.rtk_avg_savings_pct, None);
     Ok(())
 }
 
@@ -655,6 +658,83 @@ fn print_period_table(periods: &[PeriodEconomics], verbose: u8) {
             );
         }
     }
+    println!();
+}
+
+// ── Flat-rate agent section ──
+
+/// Print true-savings table for flat-rate agents (Copilot, Gemini, etc.).
+///
+/// Flat-rate agents pay a fixed monthly subscription rather than per-token, so
+/// the ccusage cost model does not apply to them. Instead we show how many tokens
+/// each agent actually consumed alongside RTK's estimated savings, giving the
+/// honest "true savings %" = saved / (actual + saved).
+///
+/// Silently skips the section when no agent session files are found so users
+/// who only use Claude Code (pay-per-token) don't see an empty, confusing block.
+fn print_flat_rate_section(rtk_saved: usize, cmd_savings_pct: f64, _date_filter: Option<&str>) {
+    let agents = cli_usage::read_all_agents();
+    if agents.is_empty() {
+        return;
+    }
+
+    // Collect and sort agents for deterministic output.
+    let mut rows: Vec<(String, u64)> = agents
+        .iter()
+        .map(|(name, daily)| (name.clone(), daily.values().sum::<u64>()))
+        .collect();
+    rows.sort_by_key(|(name, _)| name.clone());
+
+    let total_actual: u64 = rows.iter().map(|(_, t)| t).sum();
+    let saved_u64 = rtk_saved as u64;
+    let total_savings_pct = if total_actual + saved_u64 > 0 {
+        saved_u64 as f64 / (total_actual + saved_u64) as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    println!("Flat-Rate Agent Savings (actual token usage)");
+    println!("════════════════════════════════════════════════════");
+    println!();
+    println!(
+        "{:<16} {:>14} {:>12} {:>15} {:>15}",
+        "Agent", "Agent tokens", "RTK saved", "Cmd savings %", "Total savings %"
+    );
+    println!(
+        "{:-<16} {:-<14} {:-<12} {:-<15} {:-<15}",
+        "", "", "", "", ""
+    );
+
+    // Per-agent rows: agent tokens only; savings can't be attributed per-agent.
+    for (name, actual) in &rows {
+        println!(
+            "{:<16} {:>14} {:>12} {:>15} {:>15}",
+            name,
+            format_tokens(*actual as usize),
+            "—",
+            "—",
+            "—"
+        );
+    }
+
+    // Total row: all agents combined vs the global RTK saved.
+    println!(
+        "{:-<16} {:-<14} {:-<12} {:-<15} {:-<15}",
+        "", "", "", "", ""
+    );
+    println!(
+        "{:<16} {:>14} {:>12} {:>14.1}% {:>14.1}%",
+        "Total",
+        format_tokens(total_actual as usize),
+        format_tokens(rtk_saved),
+        cmd_savings_pct,
+        total_savings_pct
+    );
+    println!();
+    println!("  Cmd savings %   = RTK heuristic (chars/4 estimate, per-command average).");
+    println!("  Total savings % = RTK_saved / (agent_tokens + RTK_saved).");
+    println!("  RTK savings are a global total and cannot be split per agent.");
+    println!("  Input tokens excluded for Gemini (cumulative context inflation).");
     println!();
 }
 
